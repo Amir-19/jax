@@ -1281,3 +1281,102 @@ def to_remote_ptr(ptr, peer):
 
 def to_remote_memref(ref, peer):
   return ptr_as_memref(to_remote_ptr(memref_ptr(ref), peer), ref.type)
+
+
+def to_mc_ptr(ref, team_id=0):
+  # default value for team_id=0 is for NVSHMEM_TEAM_WORLD=0
+  i32_ty = ir.IntegerType.get_signless(32)
+  team_id_cst = c(team_id, i32_ty)
+  ref_ptr = memref_ptr(ref)
+  mc_ptr = llvm.CallOp(ir.Type.parse("!llvm.ptr"), [team_id_cst, ref_ptr],
+                         op_bundle_operands=[], op_bundle_sizes=[], op_bundle_tags=[],
+                         callee="nvshmemx_mc_ptr").result
+  return mc_ptr
+
+
+def to_mc_memref(ref, team_id=0):
+  return ptr_as_memref(to_mc_ptr(ref, team_id), ref.type)
+
+
+def signal_with_red(mc_ptr, is_relaxed=False):
+  mode = "relaxed" if is_relaxed else "release"
+  asm_instr = f"""
+  {{
+      multimem.red.{mode}.sys.global.add.u32 [$0], 1;
+      fence.proxy.alias;
+  }}"""
+  llvm.inline_asm(
+    ir.Type.parse("!llvm.void"),
+    [mc_ptr],
+    asm_instr,
+    "l",
+    has_side_effects=True,
+    asm_dialect=0,
+  )
+
+
+def wait_loop(uc_ptr, num_gpus=8, is_relaxed=False):
+  mode = "relaxed" if is_relaxed else "acquire"
+  asm_instr = f"""
+  {{
+      .reg .u32   %tmp32_<1>;
+      .reg .pred  %p<1>;
+
+      wait_signal:
+          atom.global.sys.{mode}.cas.b32 %tmp32_0, [$0], {num_gpus}, 0;
+          setp.eq.u32 %p0, %tmp32_0, 8;
+          @!%p0 bra wait_signal;
+  }}"""
+  llvm.inline_asm(
+    ir.Type.parse("!llvm.void"),
+    [uc_ptr],
+    asm_instr,
+    "l",
+    has_side_effects=True,
+    asm_dialect=0,
+  )
+
+
+def global_membar():
+  llvm.inline_asm(
+      ir.Type.parse("!llvm.void"),
+      [],
+      "membar.gl;",
+      "",
+      has_side_effects=True,
+  )
+
+
+def multimem_ld_reduce_128(mc_ptr):
+  # ld reduce 8 f16?
+  i32 = ir.IntegerType.get_signless(32)
+  return_struct = llvm.inline_asm(
+      ir.Type.parse("!llvm.struct<(i32,i32,i32,i32)>"),
+      [mc_ptr],
+      "multimem.ld_reduce.relaxed.sys.global.add.v4.f16x2 {$0, $1, $2, $3}, [$4];",
+      "=r,=r,=r,=r,l",
+      has_side_effects=True,
+      asm_dialect=0,
+  )
+  return_regs = [
+        llvm.extractvalue(i32, return_struct, [i]) for i in range(4)
+  ]
+  return return_regs[0], return_regs[1], return_regs[2], return_regs[3]
+
+
+def multimem_st_128(mc_ptr, x, y, z, w):
+  i32 = ir.IntegerType.get_signless(32)
+  llvm.inline_asm(
+      i32,
+      [mc_ptr, x, y, z, w],
+      "multimem.st.relaxed.sys.global.v4.f32 [$1], {$2, $3, $4, $5};",
+      "=r,l,r,r,r,r",
+      has_side_effects=True,
+      asm_dialect=0,
+  )
+
+
+def get_device_id():
+  return llvm.CallOp(ir.IntegerType.get_signless(32), [],
+                     op_bundle_operands=[], op_bundle_sizes=[], op_bundle_tags=[],
+                     callee="nvshmem_my_pe").result

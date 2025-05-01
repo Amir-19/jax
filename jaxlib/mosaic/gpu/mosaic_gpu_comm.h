@@ -36,6 +36,8 @@ namespace gpu {
     abort();                                                              \
   }
 
+typedef int32_t nvshmem_team_t;
+
 class NvshmemApi {
  public:
   // Returns a default NvshmemApi for a current process.
@@ -54,6 +56,10 @@ class NvshmemApi {
     nvshmemx_barrier_all_on_stream(stream);
   }
 
+  void* mc_ptr(nvshmem_team_t team, void* addr){
+    return nvshmemx_mc_ptr(team,addr);
+  }
+
   NvshmemApi(NvshmemApi const&)     = delete;
   void operator=(NvshmemApi const&) = delete;
 
@@ -70,10 +76,12 @@ class NvshmemApi {
 
     NVSHMEM_SET_FN(nvshmemx_barrier_all_on_stream)
     NVSHMEM_SET_FN(nvshmemx_cumodule_init)
+    NVSHMEM_SET_FN(nvshmemx_mc_ptr)
   }
 
   int (*nvshmemx_cumodule_init)(CUmodule);
   int (*nvshmemx_barrier_all_on_stream)(cudaStream_t);
+  void* (*nvshmemx_mc_ptr)(int, void*);
 
   std::mutex mutex_;
 };

@@ -394,7 +394,9 @@ absl::StatusOr<std::pair<std::unique_ptr<mlir::ExecutionEngine>, bool>> Compile(
     return sm_and_ptx_isa.status();
   }
   const std::string sm = sm_and_ptx_isa.value().first;
-  const std::string ptx_isa = sm_and_ptx_isa.value().second;
+  //const std::string ptx_isa = sm_and_ptx_isa.value().second;
+  // TODO(asamani): remove after ptx isa issue is fixed
+  const std::string ptx_isa = "ptx81";
   bool is_comm_used = is_nvshmem_used(module);
   std::string nvshmem_path = "";
   if (is_comm_used) {

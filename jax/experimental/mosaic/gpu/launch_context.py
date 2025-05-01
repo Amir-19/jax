@@ -313,10 +313,12 @@ class LaunchContext:
       reduction_op: Literal[
         "add","min","max","inc","dec","and","or","xor"
       ] | None,
+      team_id,
   ):
-    tma_desc_key = (gmem_ref, transformed_slice_shape, swizzle, gmem_transform)
+    tma_desc_key = (gmem_ref, transformed_slice_shape, swizzle, gmem_transform, team_id)
     if (tma_desc := self.tma_descriptors.get(tma_desc_key, None)) is None:
       i64 = ir.IntegerType.get_signless(64)
+      i32 = ir.IntegerType.get_signless(32)
       ptr_ty = ir.Type.parse("!llvm.ptr")
       def init_tma_desc(host_ptr):
         ref = gmem_ref
@@ -378,6 +380,7 @@ class LaunchContext:
             utils.pack_array([as_i64(i) for i in sizes_and_strides[rank:]]),
             c(swizzle_arg, i64),
             utils.pack_array([c(v, i64) for v in transformed_slice_shape]),
+            c(team_id, i32),
         ]
         func.call([], "mosaic_gpu_init_tma_desc", args)
       def cast_tma_desc(device_ptr):
@@ -410,6 +413,7 @@ class LaunchContext:
       reduction_op: Literal[
         "add","min","max","inc","dec","and","or","xor"
       ] | None = None,
+      team_id: int | None = None,
   ):
     """Initiates an async copy between GMEM and SMEM.
 
@@ -638,9 +642,14 @@ class LaunchContext:
     else:
       multicast_mask = None
 
-    tma_desc = self._get_tma_desc(
-        gmem_ref, gmem_transform, tuple(slice_shape), swizzle, reduction_op,
-    )
+    if team_id is None:
+      tma_desc = self._get_tma_desc(
+          gmem_ref, gmem_transform, tuple(slice_shape), swizzle, reduction_op, -1,
+      )
+    else:
+      tma_desc = self._get_tma_desc(
+          gmem_ref, gmem_transform, tuple(slice_shape), swizzle, reduction_op, team_id,
+      )
 
     # We constuct TMA descriptors in column-major order.
     rev_dyn_base_indices = [

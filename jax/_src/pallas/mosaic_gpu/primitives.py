@@ -186,6 +186,7 @@ def _copy_smem_to_gmem_lowering(
     has_user_predicate,
     commit_group,
     reduction_op: Literal["add", "min", "max", "inc", "dec", "and", "or", "xor"] | None,
+    team_id,
 ):
   if has_user_predicate:
     flat_args, user_predicate = flat_args[:-1], flat_args[-1]
@@ -217,6 +218,7 @@ def _copy_smem_to_gmem_lowering(
         predicate=predicate,
         arrive=commit_group,
         reduction_op=reduction_op,
+        team_id=team_id,
         **copy_params,
     )
     return ()
@@ -298,6 +300,7 @@ def copy_smem_to_gmem(
     reduction_op: Literal[
       "add","min","max","inc","dec","and","or","xor"
     ] | None = None,
+    team_id: int | None = None,
 ) -> None:
   """Asynchronously copies a SMEM reference to a GMEM reference.
 
@@ -310,6 +313,7 @@ def copy_smem_to_gmem(
       are committed to a group and can be awaited jointly via
       :func:`jax.experimental.mosaic.gpu.wait_smem_to_gmem`.
     reduction_op: if set, perform the specified reduction op when copy to gmem
+    team_id: if set, dst ref would be translated to a multicast memory addr
 
   See also:
     :func:`jax.experimental.mosaic.gpu.wait_smem_to_gmem`
@@ -338,6 +342,7 @@ def copy_smem_to_gmem(
       has_user_predicate=predicate is not None,
       commit_group=commit_group,
       reduction_op=reduction_op,
+      team_id = team_id,
   )
   return None
 
