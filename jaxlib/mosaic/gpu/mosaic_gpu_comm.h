@@ -45,7 +45,7 @@ class NvshmemApi {
     return instance;
   }
 
-  int cumodule_int(CUmodule module) {
+  int cumodule_init(CUmodule module) {
     std::lock_guard<std::mutex> lock(mutex_);
     return nvshmemx_cumodule_init(module);
   }
@@ -68,12 +68,10 @@ class NvshmemApi {
       abort();
     }
 
-    // Initialize supported NVSHMEM host API
-    NVSHMEM_SET_FN(nvshmemx_cumodule_init)
     NVSHMEM_SET_FN(nvshmemx_barrier_all_on_stream)
+    NVSHMEM_SET_FN(nvshmemx_cumodule_init)
   }
 
-  // Dlopened NVSHMEM API
   int (*nvshmemx_cumodule_init)(CUmodule);
   int (*nvshmemx_barrier_all_on_stream)(cudaStream_t);
 
