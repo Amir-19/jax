@@ -1864,3 +1864,52 @@ def query_cluster_cancel(result_ref) -> tuple[
   cancelled_launch = llvm.extractvalue(i1, desc, [3])
 
   return (*cta_ids, cancelled_launch)
+
+
+def spin_lock_multimem_arrive(mc_ptr, is_relaxed=False):
+  mode = "relaxed" if is_relaxed else "release"
+  asm_instr = f"""
+  {{
+      multimem.red.{mode}.sys.global.add.u32 [$0], 1;
+      fence.proxy.alias;
+  }}"""
+  llvm.inline_asm(
+    ir.Type.parse("!llvm.void"),
+    [mc_ptr],
+    asm_instr,
+    "l",
+    has_side_effects=True,
+    asm_dialect=0,
+  )
+
+
+def spin_lock_wait(uc_ptr, num_gpus=8, is_relaxed=False):
+
+  mode = "relaxed" if is_relaxed else "acquire"
+  asm_instr = f"""
+  {{
+      .reg .u32   %tmp32_<1>;
+      .reg .pred  %p<1>;
+      wait_signal:
+          atom.global.sys.{mode}.cas.b32 %tmp32_0, [$0], {num_gpus}, 0;
+          setp.eq.u32 %p0, %tmp32_0, {num_gpus};
+          @!%p0 bra wait_signal;
+  }}"""
+  llvm.inline_asm(
+    ir.Type.parse("!llvm.void"),
+    [uc_ptr],
+    asm_instr,
+    "l",
+    has_side_effects=True,
+    asm_dialect=0,
+  )
+
+
+def global_membar():
+  llvm.inline_asm(
+      ir.Type.parse("!llvm.void"),
+      [],
+      "membar.gl;",
+      "",
+      has_side_effects=True,
+  )

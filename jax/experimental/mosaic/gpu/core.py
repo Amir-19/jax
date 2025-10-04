@@ -776,8 +776,9 @@ def _run_serde_pass(
 def _declare_runtime_functions():
   """Declares the runtime functions that can be used by the generated code."""
   ptr_ty = ir.Type.parse("!llvm.ptr")
+  i32 = ir.IntegerType.get_signless(32)
   i64 = ir.IntegerType.get_signless(64)
-  arg_tys = [ptr_ty, ptr_ty, i64, i64, ptr_ty, ptr_ty, i64, ptr_ty]
+  arg_tys = [ptr_ty, ptr_ty, i64, i64, ptr_ty, ptr_ty, i64, ptr_ty, i32]
   init_tma_desc_type = ir.FunctionType.get(arg_tys, [])
   func.FuncOp(
       "mosaic_gpu_init_tma_desc", init_tma_desc_type, visibility="private"

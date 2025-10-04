@@ -503,12 +503,13 @@ class LaunchContext:
       transformed_slice_shape: tuple[int, ...],
       swizzle: int | None,
       reduction_op: TMAReductionOp | None,
+      team_id: int,
   ):
     gmem_ref = _find_kernel_argument_for_gmem_ref(gmem_ref)
     # Using ir.Values in cache keys is a little sketchy, but I think it should
     # be fine. Having it in the key will keep it alive, and if comparison and
     # hashing is by identity then it should work out.
-    tma_desc_key = (gmem_ref, transformed_slice_shape, swizzle, gmem_transform, gmem_peer_id)
+    tma_desc_key = (gmem_ref, transformed_slice_shape, swizzle, gmem_transform, gmem_peer_id, team_id)
     if (tma_desc := self.tma_descriptors.get(tma_desc_key, None)) is None:
       i32 = ir.IntegerType.get_signless(32)
       i64 = ir.IntegerType.get_signless(64)
@@ -610,6 +611,7 @@ class LaunchContext:
             utils.pack_array([as_i64(i) for i in sizes_and_strides[rank:]]),
             c(swizzle_arg, i64),
             utils.pack_array([c(v, i64) for v in transformed_slice_shape]),
+            c(team_id, i32),
         ]
         func.call([], "mosaic_gpu_init_tma_desc", args)
       def cast_tma_desc(device_ptr):
@@ -875,6 +877,7 @@ class LaunchContext:
       predicate: ir.Value | None | _DefaultPredicate = _DefaultPredicate(),
       reduction_op: TMAReductionOp | None = None,
       implementation: AsyncCopyImplementation = AsyncCopyImplementation.TMA,
+      team_id: int | None = None,
   ):
     """Initiates an async copy between GMEM and SMEM.
 
@@ -1146,7 +1149,7 @@ class LaunchContext:
       is_gather_dim = [bool(s) for s in slice_gather_strides]
 
       tma_desc = self._get_tma_desc(
-          gmem_ref, (), gmem_peer_id, (1, slice_shape[-1]), swizzle, reduction_op,
+          gmem_ref, (), gmem_peer_id, (1, slice_shape[-1]), swizzle, reduction_op, -1,
       )
 
       # Indices are split over 4 warps, and replicated within each warp.
@@ -1237,10 +1240,16 @@ class LaunchContext:
       return
 
     assert gather_indices is None  # Only tiled TMA handled below.
-    tma_desc = self._get_tma_desc(
-        gmem_ref, gmem_transform, gmem_peer_id,
-        tuple(slice_shape), swizzle, reduction_op,
-    )
+    if team_id is None:
+      tma_desc = self._get_tma_desc(
+          gmem_ref, gmem_transform, gmem_peer_id,
+          tuple(slice_shape), swizzle, reduction_op, -1,
+      )
+    else:
+      tma_desc = self._get_tma_desc(
+          gmem_ref, gmem_transform, gmem_peer_id,
+          tuple(slice_shape), swizzle, reduction_op, team_id,
+      )
     # We construct TMA descriptors in column-major order.
     rev_dyn_base_indices = [
         arith.index_cast(i32, idx) for idx in reversed(dyn_base_indices)
@@ -1371,7 +1380,7 @@ class LaunchContext:
 
     tma_desc = self._get_tma_desc(
         gmem_ref, gmem_transform, gmem_peer_id,
-        tuple(slice_shape), swizzle, reduction_op=None,
+        tuple(slice_shape), swizzle, reduction_op=None, team_id=-1,
     )
     # We construct TMA descriptors in column-major order.
     rev_dyn_base_indices = [
@@ -1449,13 +1458,21 @@ class LaunchContext:
       raise ValueError(f"peer index must be an i32, got {peer.type}")
     return llvm.call(ref.type, [ref, peer], [], [], callee="nvshmem_ptr")
 
-  def to_remote_multicast(self, ref: ir.Value):
+  def to_remote_multicast_ptr(self, ref: ir.Value):
     i32 = ir.IntegerType.get_signless(32)
     self._ensure_nvshmem_decls()
     if not ir.MemRefType.isinstance(ref.type):
       raise ValueError(f"Unsupported type for to_remote_multicast: {ref.type}")
       # We replace the offset in the ref type by 0, because memref_ptr always
       # folds the offset into the pointer.
+    world_team = arith.constant(i32, 0)
+    ptr = utils.memref_ptr(ref)
+    mc_ptr = llvm.call(
+        ptr.type, [world_team, ptr], [], [], callee="nvshmemx_mc_ptr",
+    )
+    return mc_ptr
+
+  def to_remote_multicast(self, ref: ir.Value):
     ref_ty = ir.MemRefType(ref.type)
     strides, _ = ref_ty.get_strides_and_offset()
     result_type = ir.MemRefType.get(
@@ -1464,11 +1481,7 @@ class LaunchContext:
         ir.StridedLayoutAttr.get(0, strides),
         ref_ty.memory_space,
     )
-    world_team = arith.constant(i32, 0)
-    ptr = utils.memref_ptr(ref)
-    mc_ptr = llvm.call(
-        ptr.type, [world_team, ptr], [], [], callee="nvshmemx_mc_ptr",
-    )
+    mc_ptr = self.to_remote_multicast_ptr(ref)
     return utils.MultimemRef(utils.ptr_as_memref(mc_ptr, result_type))
 
   def device_id(self) -> ir.Value:
